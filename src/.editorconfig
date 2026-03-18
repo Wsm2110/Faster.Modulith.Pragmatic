@@ -1,0 +1,27 @@
+# Root-level EditorConfig file
+root = true
+
+[*.cs]
+# Modulith Base Configuration
+modulith.architectural_layers = Application, Domain, Infrastructure, Contracts
+modulith.exempt_keywords = BuildingBlocks, Shared, Common 
+
+# MOD001: Invalid Cross-Module Reference
+# Enforces that modules must remain physically isolated.
+dotnet_diagnostic.MOD001.severity = error
+
+# MOD002: Entrypoints Must Not Contain Public Fields Or Properties
+# Enforces that entrypoint interfaces must not expose state.
+dotnet_diagnostic.MOD002.severity = error
+
+# MOD003: Invalid Cross-Module Interface Usage
+# Strictly bans the injection of internal module interfaces across boundaries.
+dotnet_diagnostic.MOD003.severity = error
+
+# MOD004: Service Locator Anti-Pattern Detected
+# Enforces explicit dependency injection instead of IServiceProvider.
+dotnet_diagnostic.MOD004.severity = error
+
+# MOD005: Invalid Cross-Module Event Publishing
+# Enforces that an event can only be published by the owning module.
+dotnet_diagnostic.MOD005.severity = error

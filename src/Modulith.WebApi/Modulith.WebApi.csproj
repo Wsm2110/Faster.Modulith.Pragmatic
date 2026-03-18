@@ -1,0 +1,28 @@
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FluentValidation" Version="12.1.1" />
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.5" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.5" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\BuildingBlocks\Modulith.Analyzer\Modulith.Analyzer.csproj"
+                      OutputItemType="Analyzer"
+                      ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\BuildingBlocks\Modulith.ArchictureOverview\Modulith.ArchitectureOverview.csproj" 
+                      OutputItemType="Analyzer"
+                      ReferenceOutputAssembly="false"
+                      />
+    <ProjectReference Include="..\BuildingBlocks\Modulith.DomainEventDispatcher\Modulith.DomainEventDispatcher.csproj" />
+    <ProjectReference Include="..\BuildingBlocks\Modulith.Result\Modulith.Result.csproj" />
+  </ItemGroup>
+
+</Project>
+   

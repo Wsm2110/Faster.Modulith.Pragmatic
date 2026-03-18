@@ -1,0 +1,24 @@
+<Solution>
+  <Folder Name="/src/">
+    <Folder Name="BuildingBlocks">
+      <Project Path="../BuildingBlocks/Modulith.Analyzer/Modulith.Analyzer.csproj" />
+      <Project Path="../BuildingBlocks/Modulith.EventDispatcher/Modulith.DomainEventDispatcher.csproj" />
+      <Project Path="BuildingBlocks/Modulith.MermaidDiagram/Modulith.ArchitectureOverview.csproj" />
+    </Folder>
+    <Folder Name="Host">
+      <Project Path="Modulith.WebApi/Modulith.WebApi.csproj" />
+    </Folder>
+  </Folder>
+  <Folder Name="/src/BuildingBlocks/">
+    <Project Path="BuildingBlocks/Modulith.Analyzer/Modulith.Analyzer.csproj" />
+    <Project Path="BuildingBlocks/Modulith.ArchictureOverview/Modulith.ArchitectureOverview.csproj" />
+    <Project Path="BuildingBlocks/Modulith.DomainEventDispatcher/Modulith.DomainEventDispatcher.csproj" />
+    <Project Path="BuildingBlocks/Modulith.Result/Modulith.Result.csproj" Id="4111cb43-4fa3-40ca-bc60-5afb578ecdca" />
+  </Folder>
+  <Folder Name="/src/Host/">
+    <Project Path="Modulith.WebApi/Modulith.WebApi.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="../tests/Modulith.Analyzer.Tests/Modulith.Analyzer.Tests.csproj" />
+  </Folder>
+</Solution>

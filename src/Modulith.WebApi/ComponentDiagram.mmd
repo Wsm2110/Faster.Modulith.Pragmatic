@@ -10,30 +10,30 @@ graph TD
     EP_GET_api_system_status(["GET /api/system/status"]):::endpoint
     Program("Program"):::generic
     ModuleDispatcher("ModuleDispatcher"):::generic
-    subgraph Storage_Module ["Storage Module"]
-        Modulith_WebApi_Modules_Storage_StorageModuleExtensions("StorageModuleExtensions"):::generic
-        Modulith_WebApi_Modules_Storage_Application_StorageEntryPoint("StorageEntryPoint"):::generic
-        Modulith_WebApi_Modules_Storage_Application_CommandHandlers_StoreTrackDataCommand{{"StoreTrackDataCommand"}}:::message
-        Modulith_WebApi_Modules_Storage_Application_CommandHandlers_StoreTrackDataCommandValidator("StoreTrackDataCommandValidator"):::generic
-        Modulith_WebApi_Modules_Storage_Application_CommandHandlers_StoreTrackDataCommandHandler("StoreTrackDataCommandHandler"):::handler
-        Modulith_WebApi_Modules_Storage_Application_CommandHandlers_GetFriendlyTrackCommand{{"GetFriendlyTrackCommand"}}:::message
-        Modulith_WebApi_Modules_Storage_Application_CommandHandlers_GetTrackCommandHandler("GetTrackCommandHandler"):::handler
-        Modulith_WebApi_Modules_Storage_Infrastructure_InMemoryTrackRepository[("InMemoryTrackRepository")]:::db
-        Modulith_WebApi_Modules_Storage_Contracts_FriendlyTrackDto("FriendlyTrackDto"):::generic
-        Modulith_WebApi_Modules_Storage_Contracts_FriendlyTrackStoredEvent{{"FriendlyTrackStoredEvent"}}:::message
-        Modulith_WebApi_Modules_Storage_Contracts_TrackStorageDto("TrackStorageDto"):::generic
-        Modulith_WebApi_Modules_Storage_Domain_FriendlyForceTrack("FriendlyForceTrack"):::generic
-    end
     subgraph Replication_Module ["Replication Module"]
         Modulith_WebApi_Modules_Replication_ReplicationModuleExtensions("ReplicationModuleExtensions"):::generic
         Modulith_WebApi_Modules_Replication_Contracts_ReplicateTrackDto("ReplicateTrackDto"):::generic
         Modulith_WebApi_Modules_Replication_Contracts_TrackReplicationResponse("TrackReplicationResponse"):::generic
         Modulith_WebApi_Modules_Replication_Application_ReplicationEntrypoint("ReplicationEntrypoint"):::facade
+        Modulith_WebApi_Modules_Replication_Application_EventHandlers_FriendlyTrackStoredEventHandler("FriendlyTrackStoredEventHandler"):::handler
         Modulith_WebApi_Modules_Replication_Application_CommandHandlers_ReplicateTrackCommand{{"ReplicateTrackCommand"}}:::message
         Modulith_WebApi_Modules_Replication_Application_CommandHandlers_ReplicateTrackCommandValidator("ReplicateTrackCommandValidator"):::generic
         Modulith_WebApi_Modules_Replication_Application_CommandHandlers_ReplicateTrackCommandHandler("ReplicateTrackCommandHandler"):::handler
-        Modulith_WebApi_Modules_Replication_Application_EventHandlers_FriendlyTrackStoredEventHandler("FriendlyTrackStoredEventHandler"):::handler
         Modulith_WebApi_Modules_Replication_Infrastructure_DummyNetworkReplicationClient("DummyNetworkReplicationClient"):::generic
+    end
+    subgraph Storage_Module ["Storage Module"]
+        Modulith_WebApi_Modules_Storage_StorageModuleExtensions("StorageModuleExtensions"):::generic
+        Modulith_WebApi_Modules_Storage_Domain_FriendlyForceTrack("FriendlyForceTrack"):::generic
+        Modulith_WebApi_Modules_Storage_Contracts_FriendlyTrackDto("FriendlyTrackDto"):::generic
+        Modulith_WebApi_Modules_Storage_Contracts_FriendlyTrackStoredEvent{{"FriendlyTrackStoredEvent"}}:::message
+        Modulith_WebApi_Modules_Storage_Contracts_TrackStorageDto("TrackStorageDto"):::generic
+        Modulith_WebApi_Modules_Storage_Application_StorageEntryPoint("StorageEntryPoint"):::generic
+        Modulith_WebApi_Modules_Storage_Application_CommandHandlers_GetFriendlyTrackCommand{{"GetFriendlyTrackCommand"}}:::message
+        Modulith_WebApi_Modules_Storage_Application_CommandHandlers_GetTrackCommandHandler("GetTrackCommandHandler"):::handler
+        Modulith_WebApi_Modules_Storage_Application_CommandHandlers_StoreTrackDataCommand{{"StoreTrackDataCommand"}}:::message
+        Modulith_WebApi_Modules_Storage_Application_CommandHandlers_StoreTrackDataCommandValidator("StoreTrackDataCommandValidator"):::generic
+        Modulith_WebApi_Modules_Storage_Application_CommandHandlers_StoreTrackDataCommandHandler("StoreTrackDataCommandHandler"):::handler
+        Modulith_WebApi_Modules_Storage_Infrastructure_InMemoryTrackRepository[("InMemoryTrackRepository")]:::db
     end
     Program -->|"Calls"| ModuleDispatcher
     Program -->|"Calls"| Modulith_WebApi_Modules_Storage_StorageModuleExtensions
@@ -43,22 +43,22 @@ graph TD
     ModuleDispatcher -->|"Calls"| Modulith_WebApi_Modules_Storage_StorageModuleExtensions
     ModuleDispatcher -->|"Calls"| Modulith_WebApi_Modules_Replication_ReplicationModuleExtensions
     ModuleDispatcher -->|"Calls"| Modulith_WebApi_Modules_Storage_Application_StorageEntryPoint
+    Modulith_WebApi_Modules_Replication_Application_ReplicationEntrypoint -->|"Calls"| Modulith_WebApi_Modules_Replication_Application_CommandHandlers_ReplicateTrackCommandHandler
+    Modulith_WebApi_Modules_Replication_Application_EventHandlers_FriendlyTrackStoredEventHandler -->|"Calls"| Modulith_WebApi_Modules_Replication_Infrastructure_DummyNetworkReplicationClient
+    Modulith_WebApi_Modules_Replication_Application_CommandHandlers_ReplicateTrackCommand -->|"Calls"| Modulith_WebApi_Modules_Replication_Contracts_ReplicateTrackDto
+    Modulith_WebApi_Modules_Replication_Application_CommandHandlers_ReplicateTrackCommandHandler -->|"Calls"| Modulith_WebApi_Modules_Replication_Application_CommandHandlers_ReplicateTrackCommandValidator
+    Modulith_WebApi_Modules_Replication_Application_CommandHandlers_ReplicateTrackCommandHandler -->|"Calls"| Modulith_WebApi_Modules_Replication_Infrastructure_DummyNetworkReplicationClient
     Modulith_WebApi_Modules_Storage_Application_StorageEntryPoint -->|"Calls"| Modulith_WebApi_Modules_Storage_Application_CommandHandlers_StoreTrackDataCommandHandler
     Modulith_WebApi_Modules_Storage_Application_StorageEntryPoint -->|"Calls"| Modulith_WebApi_Modules_Storage_Application_CommandHandlers_GetTrackCommandHandler
+    Modulith_WebApi_Modules_Storage_Application_CommandHandlers_GetTrackCommandHandler -->|"Calls"| Modulith_WebApi_Modules_Storage_Infrastructure_InMemoryTrackRepository
     Modulith_WebApi_Modules_Storage_Application_CommandHandlers_StoreTrackDataCommand -->|"Calls"| Modulith_WebApi_Modules_Storage_Contracts_TrackStorageDto
     Modulith_WebApi_Modules_Storage_Application_CommandHandlers_StoreTrackDataCommandHandler -->|"Calls"| Modulith_WebApi_Modules_Storage_Application_CommandHandlers_StoreTrackDataCommandValidator
     Modulith_WebApi_Modules_Storage_Application_CommandHandlers_StoreTrackDataCommandHandler -->|"Calls"| Modulith_WebApi_Modules_Storage_Infrastructure_InMemoryTrackRepository
     Modulith_WebApi_Modules_Storage_Application_CommandHandlers_StoreTrackDataCommandHandler -->|"Calls"| Modulith_WebApi_Modules_Replication_Application_ReplicationEntrypoint
-    Modulith_WebApi_Modules_Storage_Application_CommandHandlers_GetTrackCommandHandler -->|"Calls"| Modulith_WebApi_Modules_Storage_Infrastructure_InMemoryTrackRepository
-    Modulith_WebApi_Modules_Replication_Application_ReplicationEntrypoint -->|"Calls"| Modulith_WebApi_Modules_Replication_Application_CommandHandlers_ReplicateTrackCommandHandler
-    Modulith_WebApi_Modules_Replication_Application_CommandHandlers_ReplicateTrackCommand -->|"Calls"| Modulith_WebApi_Modules_Replication_Contracts_ReplicateTrackDto
-    Modulith_WebApi_Modules_Replication_Application_CommandHandlers_ReplicateTrackCommandHandler -->|"Calls"| Modulith_WebApi_Modules_Replication_Application_CommandHandlers_ReplicateTrackCommandValidator
-    Modulith_WebApi_Modules_Replication_Application_CommandHandlers_ReplicateTrackCommandHandler -->|"Calls"| Modulith_WebApi_Modules_Replication_Infrastructure_DummyNetworkReplicationClient
-    Modulith_WebApi_Modules_Replication_Application_EventHandlers_FriendlyTrackStoredEventHandler -->|"Calls"| Modulith_WebApi_Modules_Replication_Infrastructure_DummyNetworkReplicationClient
+    Modulith_WebApi_Modules_Replication_Application_ReplicationEntrypoint ==>|"Sends"| Modulith_WebApi_Modules_Replication_Application_CommandHandlers_ReplicateTrackCommand
+    Modulith_WebApi_Modules_Replication_Application_CommandHandlers_ReplicateTrackCommandHandler ==>|"Sends"| Modulith_WebApi_Modules_Replication_Application_CommandHandlers_ReplicateTrackCommand
     Modulith_WebApi_Modules_Storage_Application_StorageEntryPoint ==>|"Sends"| Modulith_WebApi_Modules_Storage_Application_CommandHandlers_StoreTrackDataCommand
     Modulith_WebApi_Modules_Storage_Application_StorageEntryPoint ==>|"Sends"| Modulith_WebApi_Modules_Storage_Application_CommandHandlers_GetFriendlyTrackCommand
     Modulith_WebApi_Modules_Storage_Application_CommandHandlers_StoreTrackDataCommandHandler ==>|"Sends"| Modulith_WebApi_Modules_Storage_Application_CommandHandlers_StoreTrackDataCommand
     Modulith_WebApi_Modules_Storage_Application_CommandHandlers_StoreTrackDataCommandHandler -.->|"Publishes"| Modulith_WebApi_Modules_Storage_Contracts_FriendlyTrackStoredEvent
     Modulith_WebApi_Modules_Storage_Contracts_FriendlyTrackStoredEvent -.->|"Handled by"| Modulith_WebApi_Modules_Replication_Application_EventHandlers_FriendlyTrackStoredEventHandler
-    Modulith_WebApi_Modules_Replication_Application_ReplicationEntrypoint ==>|"Sends"| Modulith_WebApi_Modules_Replication_Application_CommandHandlers_ReplicateTrackCommand
-    Modulith_WebApi_Modules_Replication_Application_CommandHandlers_ReplicateTrackCommandHandler ==>|"Sends"| Modulith_WebApi_Modules_Replication_Application_CommandHandlers_ReplicateTrackCommand

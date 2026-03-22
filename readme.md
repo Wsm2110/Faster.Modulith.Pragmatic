@@ -1,6 +1,6 @@
 <div align="center">
 
-![Faster.Modulith Architecture - Chaos vs Vaults](header.png)
+![Faster.Modulith Architecture - Chaos vs Vaults](assets/header.png)
 
 ### **Compiler-Enforced Modular Monolith** for .NET
 

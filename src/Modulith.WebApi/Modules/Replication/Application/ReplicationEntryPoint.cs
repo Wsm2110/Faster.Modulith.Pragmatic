@@ -1,4 +1,4 @@
-﻿using Modulith.Result;
+﻿using Modulith.DomainEventDispatcher.Contracts;
 using Modulith.WebApi.Modules.Replication.Application.CommandHandlers;
 using Modulith.WebApi.Modules.Replication.Contracts;
 

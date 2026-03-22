@@ -13,15 +13,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\BuildingBlocks\Modulith.Analyzer\Modulith.Analyzer.csproj"
-                      OutputItemType="Analyzer"
-                      ReferenceOutputAssembly="false" />
-    <ProjectReference Include="..\BuildingBlocks\Modulith.ArchictureOverview\Modulith.ArchitectureOverview.csproj" 
-                      OutputItemType="Analyzer"
-                      ReferenceOutputAssembly="false"
-                      />
+    <ProjectReference Include="..\BuildingBlocks\Modulith.Analyzer\Modulith.Analyzer.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\BuildingBlocks\Modulith.ArchictureOverview\Modulith.ArchitectureOverview.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\BuildingBlocks\Modulith.DomainEventDispatcher\Modulith.DomainEventDispatcher.csproj" />
-    <ProjectReference Include="..\BuildingBlocks\Modulith.Result\Modulith.Result.csproj" />
   </ItemGroup>
 
 </Project>

@@ -1,4 +1,4 @@
-﻿using Modulith.Result;
+﻿using Modulith.DomainEventDispatcher.Contracts;
 using Modulith.WebApi.Modules.Storage.Contracts;
 
 namespace Modulith.WebApi.Modules.Storage.Application.CommandHandlers;

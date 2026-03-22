@@ -13,7 +13,6 @@
     <Project Path="BuildingBlocks/Modulith.Analyzer/Modulith.Analyzer.csproj" />
     <Project Path="BuildingBlocks/Modulith.ArchictureOverview/Modulith.ArchitectureOverview.csproj" />
     <Project Path="BuildingBlocks/Modulith.DomainEventDispatcher/Modulith.DomainEventDispatcher.csproj" />
-    <Project Path="BuildingBlocks/Modulith.Result/Modulith.Result.csproj" Id="4111cb43-4fa3-40ca-bc60-5afb578ecdca" />
   </Folder>
   <Folder Name="/src/Host/">
     <Project Path="Modulith.WebApi/Modulith.WebApi.csproj" />

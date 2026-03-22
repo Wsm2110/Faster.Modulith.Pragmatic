@@ -18,6 +18,6 @@ public class FriendlyTrackStoredEventHandler(INetworkReplicationClient networkRe
     public async Task Handle(FriendlyTrackStoredEvent domainEvent, CancellationToken cancellationToken)
     {
         // Demo purposes
-        await networkReplicationClient.TransmitTrackAsync(null);      
+        await networkReplicationClient.TransmitTrackAsync(default);      
     }
 }

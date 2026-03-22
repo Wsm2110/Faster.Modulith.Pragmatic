@@ -27,7 +27,7 @@ modulith.exempt_keywords = BuildingBlocks, Shared, Common
         var test = new CSharpAnalyzerTest<ModuleBoundaryAnalyzer, DefaultVerifier>
         {
             TestCode = sourceCode,
-            ReferenceAssemblies = ReferenceAssemblies.Net.Net80
+            ReferenceAssemblies = ReferenceAssemblies.Net.Net100
         };
 
         test.TestState.AnalyzerConfigFiles.Add(("/.editorconfig", SourceText.From(EditorConfig)));

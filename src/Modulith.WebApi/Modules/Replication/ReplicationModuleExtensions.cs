@@ -1,4 +1,5 @@
 ﻿using FluentValidation;
+using Modulith.DomainEventDispatcher.Contracts;
 using Modulith.WebApi.Modules.Replication.Application;
 using Modulith.WebApi.Modules.Replication.Application.CommandHandlers;
 using Modulith.WebApi.Modules.Replication.Contracts;
@@ -24,6 +25,9 @@ public static class ReplicationModuleExtensions
         // Internal Application Handlers & Validators
         services.AddScoped<IValidator<ReplicateTrackCommand>, ReplicateTrackCommandValidator>();
         services.AddScoped<ReplicateTrackCommandHandler>();
+
+        services.AddScoped<ICommandHandler<Dummy2Command, Result>, Dummy2CommandHandler>();
+
 
         // Public Entrypoint
         services.AddScoped<IReplicationEntryPoint, ReplicationEntrypoint>();

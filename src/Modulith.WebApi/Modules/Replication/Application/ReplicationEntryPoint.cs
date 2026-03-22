@@ -1,6 +1,8 @@
 ﻿using Modulith.DomainEventDispatcher.Contracts;
 using Modulith.WebApi.Modules.Replication.Application.CommandHandlers;
 using Modulith.WebApi.Modules.Replication.Contracts;
+using Modulith.WebApi.Modules.Replication.Infrastructure;
+using Modulith.WebApi.Modules.Storage.Contracts;
 
 namespace Modulith.WebApi.Modules.Replication.Application;
 
@@ -17,7 +19,8 @@ public class ReplicationEntrypoint : IReplicationEntryPoint
     /// </summary>
     /// <param name="logger">The logger instance.</param>
     /// <param name="commandHandler">The internal command handler managing the replication logic.</param>
-    public ReplicationEntrypoint(ILogger<ReplicationEntrypoint> logger, ReplicateTrackCommandHandler commandHandler)
+    public ReplicationEntrypoint(ILogger<ReplicationEntrypoint> logger,
+        ReplicateTrackCommandHandler commandHandler)
     {
         _logger = logger;
         _commandHandler = commandHandler;   

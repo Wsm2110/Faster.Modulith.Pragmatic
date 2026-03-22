@@ -4,11 +4,12 @@ using Modulith.DomainEventDispatcher.Contracts;
 namespace Modulith.DomainEventDispatcher;
 
 /// <summary>
-/// Dispatcher optimized for minimal allocation on the hot path.
+/// Provides functionality to dispatch domain events to all registered event handlers using dependency injection.
 /// </summary>
-/// <summary>
-/// Dispatcher optimized for minimal allocation on the hot path.
-/// </summary>
+/// <remarks>The EventDispatcher is designed for high-performance, fire-and-forget event publishing scenarios. It
+/// resolves all handlers for a given event type from the provided IServiceProvider and invokes them asynchronously.
+/// This class does not return responses from handlers and is suitable for use in applications following the
+/// domain-driven design (DDD) pattern. Thread safety and handler execution order are not guaranteed.</remarks>
 public class EventDispatcher : IEventDispatcher
 {
     private readonly IServiceProvider _serviceProvider;

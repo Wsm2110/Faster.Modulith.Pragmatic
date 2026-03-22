@@ -11,7 +11,7 @@ using System.Composition;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace C2sc.Tools.LogFileViewer;
+namespace Modulith.Analyzer;
 
 /// <summary>
 /// Provides a highly optimized CodeFix (lightbulb) that scaffolds handler boilerplate when MOD007 fires.

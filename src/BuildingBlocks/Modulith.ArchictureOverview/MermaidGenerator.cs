@@ -5,6 +5,7 @@ using Microsoft.CodeAnalysis.Diagnostics;
 using Microsoft.CodeAnalysis.Text;
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -12,338 +13,280 @@ using System.Text;
 namespace Modulith.ArchitectureOverview;
 
 /// <summary>
-/// Generates a complete C4 Level 3 Component Diagram using Mermaid syntax.
-/// Resolves interfaces to their concrete implementations and treats messages (Events/Commands) 
-/// as intermediary nodes. Excludes Shared and Api projects from module grouping.
-/// Also outputs a standalone .mmd file to the target project directory.
+/// An incremental source generator that produces a C4 Level 3 Component Diagram using Mermaid syntax.
+/// Optimized for extreme performance by separating the semantic extraction phase from the diagram generation phase.
+
 /// </summary>
 [Generator]
 public class ComponentDiagramGenerator : IIncrementalGenerator
 {
     /// <summary>
-    /// Initializes the incremental generator pipelines and combines the compilation provider with analyzer options.
+    /// Initializes the incremental generator pipelines. 
+    /// Registers syntax providers that filter and cache symbol data to prevent unnecessary re-evaluations.
     /// </summary>
-    /// <param name="context">The incremental generator context.</param>
+    /// <param name="context">The incremental generator context provided by the Roslyn compiler.</param>
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
-        var provider = context.CompilationProvider.Combine(context.AnalyzerConfigOptionsProvider);
-        context.RegisterSourceOutput(provider, static (spc, source) => Execute(spc, source.Left, source.Right));
+        // Provider for extracting classes and interfaces
+        var typeDeclarations = context.SyntaxProvider.CreateSyntaxProvider(
+            predicate: static (node, _) => node is ClassDeclarationSyntax or InterfaceDeclarationSyntax,
+            transform: static (ctx, _) => ExtractTypeMetadata(ctx))
+            .Where(static m => m is not null)!;
+
+        // Provider for extracting API endpoint mappings (MapGet, MapPost, etc.)
+        var endpointDeclarations = context.SyntaxProvider.CreateSyntaxProvider(
+            predicate: static (node, _) => node is InvocationExpressionSyntax invocation &&
+                                           invocation.Expression is MemberAccessExpressionSyntax memberAccess &&
+                                           memberAccess.Name.Identifier.Text.StartsWith("Map"),
+            transform: static (ctx, _) => ExtractEndpointMetadata(ctx))
+            .Where(static m => m is not null)!;
+
+        // Combine all extracted data with the compilation and analyzer options
+        var pipeline = context.CompilationProvider
+            .Combine(typeDeclarations.Collect())
+            .Combine(endpointDeclarations.Collect())
+            .Combine(context.AnalyzerConfigOptionsProvider);
+
+        context.RegisterSourceOutput(pipeline, static (spc, source) =>
+            Execute(spc, source.Left.Left.Right, source.Left.Right, source.Right));
     }
 
     /// <summary>
-    /// Core execution pipeline for mapping components and writing the diagram outputs.
+    /// The core execution pipeline. Rebuilds the relationship dictionaries from the cached incremental models
+    /// and generates the final Mermaid diagram and C# wrapper.
     /// </summary>
-    /// <param name="context">The source production context.</param>
-    /// <param name="compilation">The current compilation.</param>
-    /// <param name="options">The analyzer configuration options containing MSBuild properties.</param>
-    private static void Execute(SourceProductionContext context, Compilation compilation, AnalyzerConfigOptionsProvider options)
+    /// <param name="context">The source production context to output generated files.</param>
+    /// <param name="types">The immutable array of extracted type metadata.</param>
+    /// <param name="endpoints">The immutable array of extracted endpoint metadata.</param>
+    /// <param name="options">The analyzer options containing MSBuild properties.</param>
+    private static void Execute(
+        SourceProductionContext context,
+        ImmutableArray<TypeMetadata> types,
+        ImmutableArray<EndpointMetadata> endpoints,
+        AnalyzerConfigOptionsProvider options)
     {
+        // Guard clause to ensure we only generate diagrams for .api projects
+        if (options.GlobalOptions.TryGetValue("build_property.projectname", out string projectName) &&
+            !projectName.EndsWith(".api", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        if (types.IsDefaultOrEmpty && endpoints.IsDefaultOrEmpty) return;
+
         var typeNodes = new Dictionary<string, TypeNode>(StringComparer.OrdinalIgnoreCase);
         var dependencies = new HashSet<DependencyEdge>();
-        var endpoints = new List<EndpointInfo>();
+        var finalEndpoints = new List<EndpointInfo>();
 
         var interfaceToImplementation = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var messageHandlers = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
         var handlerMessages = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var dispatchedMessages = new List<(string CallerId, string MessageType)>();
 
-        WalkSymbolTree(compilation.Assembly.GlobalNamespace, compilation, typeNodes, dependencies, endpoints, interfaceToImplementation, messageHandlers, handlerMessages, dispatchedMessages);
+        // Reconstruct mappings from our highly-optimized immutable records
+        foreach (var type in types)
+        {
+            if (type.TypeKind != TypeKind.Interface)
+            {
+                typeNodes[type.FullName] = new TypeNode(type.FullName, type.Module, type.Name, type.ArtifactType);
+            }
 
-        if (typeNodes.Count == 0 && endpoints.Count == 0) return;
+            foreach (var iface in type.Interfaces)
+            {
+                interfaceToImplementation[iface] = type.FullName;
+            }
+
+            if (!string.IsNullOrEmpty(type.HandledMessage))
+            {
+                handlerMessages[type.FullName] = type.HandledMessage;
+                if (!messageHandlers.ContainsKey(type.HandledMessage))
+                {
+                    messageHandlers[type.HandledMessage] = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                }
+                messageHandlers[type.HandledMessage].Add(type.FullName);
+            }
+
+            foreach (var dep in type.Dependencies)
+            {
+                dependencies.Add(new DependencyEdge(type.FullName, dep, "Calls", "-->"));
+            }
+
+            foreach (var msg in type.DispatchedMessages)
+            {
+                dispatchedMessages.Add((type.FullName, msg));
+            }
+        }
+
+        foreach (var ep in endpoints)
+        {
+            finalEndpoints.Add(new EndpointInfo(ep.Verb, ep.Route, ep.Id));
+
+            foreach (var dep in ep.Dependencies)
+            {
+                dependencies.Add(new DependencyEdge(ep.Id, dep, "Calls", "==>"));
+            }
+
+            foreach (var msg in ep.DispatchedMessages)
+            {
+                dispatchedMessages.Add((ep.Id, msg));
+            }
+        }
 
         var resolvedDeps = ResolveConcreteDependencies(dependencies, interfaceToImplementation);
 
         BridgeDynamicDispatch(resolvedDeps, dispatchedMessages, messageHandlers, handlerMessages, interfaceToImplementation, typeNodes);
 
-        string mermaidSyntax = GenerateMermaidSyntax(typeNodes.Values, resolvedDeps, endpoints);
-
+        string mermaidSyntax = GenerateMermaidSyntax(typeNodes.Values, resolvedDeps, finalEndpoints);
         string sourceCode = GenerateCSharpWrapper(mermaidSyntax);
+
         context.AddSource("ComponentDiagram.g.cs", SourceText.From(sourceCode, Encoding.UTF8));
 
-#pragma warning disable RS1035 // Do not use APIs banned for analyzers
-        try
-        {
-            // Attempt to retrieve the ProjectDir property from MSBuild
-            if (options.GlobalOptions.TryGetValue("build_property.projectdir", out string projectDir) && !string.IsNullOrWhiteSpace(projectDir))
-            {
-                string filePath = Path.Combine(projectDir, "ComponentDiagram.mmd");
-
-                bool shouldWrite = true;
-                if (File.Exists(filePath))
-                {
-                    string existingContent = File.ReadAllText(filePath, Encoding.UTF8);
-                    if (existingContent == mermaidSyntax)
-                    {
-                        shouldWrite = false;
-                    }
-                }
-
-                if (shouldWrite)
-                {
-                    File.WriteAllText(filePath, mermaidSyntax, Encoding.UTF8);
-                }
-            }
-        }
-        catch (Exception)
-        {
-            // Silently swallow exceptions to ensure background IDE processes do not crash on file lock
-        }
-#pragma warning restore RS1035
+        WriteDiagramToDisk(options, mermaidSyntax);
     }
 
     /// <summary>
-    /// Generates the raw Mermaid syntax string.
+    /// Transforms an AST node representing a Class or Interface into a lightweight, immutable <see cref="TypeMetadata"/> record.
     /// </summary>
-    private static string GenerateMermaidSyntax(IEnumerable<TypeNode> nodes, HashSet<DependencyEdge> dependencies, List<EndpointInfo> endpoints)
+    /// <param name="context">The syntax context providing access to the semantic model.</param>
+    /// <returns>A populated metadata record, or null if the symbol cannot be resolved.</returns>
+    private static TypeMetadata ExtractTypeMetadata(GeneratorSyntaxContext context)
     {
-        var sb = new StringBuilder();
-        sb.AppendLine("%%{init: {'flowchart': {'defaultRenderer': 'elk'}} }%%");
-        sb.AppendLine("graph TD");
+        if (context.SemanticModel.GetDeclaredSymbol(context.Node) is not INamedTypeSymbol typeSymbol)
+            return null;
 
-        sb.AppendLine("    classDef endpoint fill:#4caf50,stroke:#2e7d32,stroke-width:2px,color:white;");
-        sb.AppendLine("    classDef facade fill:#e3f2fd,stroke:#1565c0,stroke-width:2px;");
-        sb.AppendLine("    classDef handler fill:#7e57c2,stroke:#4a148c,stroke-width:2px,color:white;");
-        sb.AppendLine("    classDef db fill:#efebe9,stroke:#4e342e,stroke-width:2px,shape:cylinder;");
-        sb.AppendLine("    classDef message fill:#fff9c4,stroke:#fbc02d,stroke-width:1px,stroke-dasharray: 5 5;");
-        sb.AppendLine("    classDef generic fill:#f5f5f5,stroke:#9e9e9e,stroke-width:1px;");
-
-        var trackedTypeIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var ep in endpoints)
-        {
-            sb.AppendLine($"    {ep.Id}([\"{ep.Verb} {ep.Route}\"]):::endpoint");
-            trackedTypeIds.Add(ep.Id);
-        }
-
-        foreach (var moduleGroup in nodes.GroupBy(n => n.Module))
-        {
-            bool isCore = moduleGroup.Key == "Core";
-            if (!isCore) sb.AppendLine($"    subgraph {Sanitize(moduleGroup.Key)}_Module [\"{moduleGroup.Key} Module\"]");
-
-            foreach (var node in moduleGroup)
-            {
-                string shape = node.ArtifactType == ArtifactType.Repository ? "[(" : (node.ArtifactType == ArtifactType.Message ? "{{" : "(");
-                string endShape = node.ArtifactType == ArtifactType.Repository ? ")]" : (node.ArtifactType == ArtifactType.Message ? "}}" : ")");
-
-                string style = node.ArtifactType switch
-                {
-                    ArtifactType.Repository => "db",
-                    ArtifactType.Entrypoint => "facade",
-                    ArtifactType.Handler => "handler",
-                    ArtifactType.Message => "message",
-                    _ => "generic"
-                };
-
-                string indent = isCore ? "    " : "        ";
-                sb.AppendLine($"{indent}{Sanitize(node.FullName)}{shape}\"{node.Name}\"{endShape}:::{style}");
-                trackedTypeIds.Add(node.FullName);
-            }
-
-            if (!isCore) sb.AppendLine("    end");
-        }
-
-        foreach (var dep in dependencies)
-        {
-            if (trackedTypeIds.Contains(dep.TargetFullName) && trackedTypeIds.Contains(dep.SourceFullName))
-            {
-                sb.AppendLine($"    {Sanitize(dep.SourceFullName)} {dep.EdgeStyle}|\"{dep.Label}\"| {Sanitize(dep.TargetFullName)}");
-            }
-        }
-
-        return sb.ToString();
-    }
-
-    /// <summary>
-    /// Wraps the raw Mermaid syntax into a valid C# class structure.
-    /// </summary>
-    private static string GenerateCSharpWrapper(string mermaidSyntax)
-    {
-        var sb = new StringBuilder();
-        sb.AppendLine("// <auto-generated/>");
-        sb.AppendLine("using System;");
-        sb.AppendLine("namespace Modulith.Template.Pragmatic.ArchitectureOverview;");
-        sb.AppendLine();
-        sb.AppendLine("/// <summary>");
-        sb.AppendLine("/// Contains the generated Mermaid diagram representing the system architecture.");
-        sb.AppendLine("/// </summary>");
-        sb.AppendLine("public static class ComponentDiagram {");
-
-        sb.AppendLine("    public const string MasterDiagram = @\"");
-
-        string escapedSyntax = mermaidSyntax.Replace("\"", "\"\"");
-        sb.Append(escapedSyntax);
-
-        sb.AppendLine("\";");
-        sb.AppendLine("}");
-        return sb.ToString();
-    }
-
-    /// <summary>
-    /// Recursively walks the symbol tree to aggregate types and structural relationships.
-    /// </summary>
-    private static void WalkSymbolTree(INamespaceSymbol namespaceSymbol, Compilation compilation, Dictionary<string, TypeNode> typeNodes, HashSet<DependencyEdge> dependencies, List<EndpointInfo> endpoints, Dictionary<string, string> interfaceMap, Dictionary<string, HashSet<string>> messageHandlers, Dictionary<string, string> handlerMessages, List<(string, string)> dispatchedMessages)
-    {
-        foreach (var typeMember in namespaceSymbol.GetTypeMembers())
-        {
-            AnalyzeType(typeMember, compilation, typeNodes, dependencies, endpoints, interfaceMap, messageHandlers, handlerMessages, dispatchedMessages);
-        }
-
-        foreach (var childNamespace in namespaceSymbol.GetNamespaceMembers())
-        {
-            WalkSymbolTree(childNamespace, compilation, typeNodes, dependencies, endpoints, interfaceMap, messageHandlers, handlerMessages, dispatchedMessages);
-        }
-    }
-
-    /// <summary>
-    /// Analyzes a specific type for dependencies, endpoint definitions, and implementation mapping.
-    /// </summary>
-    private static void AnalyzeType(INamedTypeSymbol typeSymbol, Compilation compilation, Dictionary<string, TypeNode> typeNodes, HashSet<DependencyEdge> dependencies, List<EndpointInfo> endpoints, Dictionary<string, string> interfaceMap, Dictionary<string, HashSet<string>> messageHandlers, Dictionary<string, string> handlerMessages, List<(string, string)> dispatchedMessages)
-    {
-        string typeFullName = typeSymbol.ToDisplayString();
-
-        foreach (var method in typeSymbol.GetMembers().OfType<IMethodSymbol>())
-        {
-            ScanForEndpoints(method, compilation, endpoints, dependencies, dispatchedMessages);
-        }
-
+        string fullName = typeSymbol.ToDisplayString();
         string moduleName = ExtractModuleName(typeSymbol.ContainingNamespace?.ToDisplayString() ?? string.Empty);
         ArtifactType artifactType = ClassifyArtifact(typeSymbol);
 
-        if (typeSymbol.TypeKind != TypeKind.Interface)
-        {
-            if (!typeNodes.ContainsKey(typeFullName))
-                typeNodes[typeFullName] = new TypeNode(typeFullName, moduleName, typeSymbol.Name, artifactType);
-        }
+        var interfaces = new List<string>();
+        string handledMessage = null;
 
         if (typeSymbol.TypeKind == TypeKind.Class && !typeSymbol.IsAbstract)
         {
             foreach (var iface in typeSymbol.AllInterfaces)
             {
                 string ifaceName = iface.ToDisplayString();
-                if (!interfaceMap.ContainsKey(ifaceName)) interfaceMap[ifaceName] = typeFullName;
+                interfaces.Add(ifaceName);
 
                 if ((iface.Name.Contains("Handler") || iface.Name.Contains("IEventHandler")) && iface.TypeArguments.Length > 0)
                 {
-                    string messageType = iface.TypeArguments[0].ToDisplayString();
-                    if (!messageHandlers.ContainsKey(messageType)) messageHandlers[messageType] = new HashSet<string>();
-                    messageHandlers[messageType].Add(typeFullName);
-                    handlerMessages[typeFullName] = messageType;
+                    handledMessage = iface.TypeArguments[0].ToDisplayString();
                 }
             }
 
-            if (typeFullName.EndsWith("Handler") && !handlerMessages.ContainsKey(typeFullName))
+            if (handledMessage == null && fullName.EndsWith("Handler"))
             {
                 var handleMethod = typeSymbol.GetMembers().OfType<IMethodSymbol>().FirstOrDefault(m => m.Name == "Handle" && m.Parameters.Length > 0);
                 if (handleMethod != null)
                 {
-                    string messageType = handleMethod.Parameters[0].Type.ToDisplayString();
-                    handlerMessages[typeFullName] = messageType;
-                    if (!messageHandlers.ContainsKey(messageType)) messageHandlers[messageType] = new HashSet<string>();
-                    messageHandlers[messageType].Add(typeFullName);
+                    handledMessage = handleMethod.Parameters[0].Type.ToDisplayString();
                 }
             }
         }
 
+        var dependencies = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var constructor in typeSymbol.Constructors)
         {
             foreach (var parameter in constructor.Parameters)
             {
                 string targetType = parameter.Type.ToDisplayString();
-                if (!string.Equals(typeFullName, targetType, StringComparison.OrdinalIgnoreCase))
+                if (!string.Equals(fullName, targetType, StringComparison.OrdinalIgnoreCase))
                 {
-                    dependencies.Add(new DependencyEdge(typeFullName, targetType, "Calls", "-->"));
+                    dependencies.Add(targetType);
                 }
             }
         }
 
-        foreach (var syntaxRef in typeSymbol.DeclaringSyntaxReferences)
+        var dispatched = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var invocations = context.Node.DescendantNodes().OfType<InvocationExpressionSyntax>();
+        foreach (var invocation in invocations)
         {
-            var model = compilation.GetSemanticModel(syntaxRef.SyntaxTree);
-            var invocations = syntaxRef.GetSyntax().DescendantNodes().OfType<InvocationExpressionSyntax>();
-
-            foreach (var invocation in invocations)
+            if (context.SemanticModel.GetSymbolInfo(invocation).Symbol is IMethodSymbol methodSymbol && methodSymbol.ContainingType != null)
             {
-                var methodSymbol = model.GetSymbolInfo(invocation).Symbol as IMethodSymbol;
-                if (methodSymbol != null && methodSymbol.ContainingType != null)
+                string targetType = methodSymbol.ContainingType.ToDisplayString();
+                if (!string.Equals(fullName, targetType, StringComparison.OrdinalIgnoreCase))
                 {
-                    string targetType = methodSymbol.ContainingType.ToDisplayString();
-                    if (!string.Equals(typeFullName, targetType, StringComparison.OrdinalIgnoreCase))
-                    {
-                        dependencies.Add(new DependencyEdge(typeFullName, targetType, "Calls", "-->"));
-                    }
+                    dependencies.Add(targetType);
+                }
+            }
+
+            foreach (var arg in invocation.ArgumentList.Arguments)
+            {
+                var argType = context.SemanticModel.GetTypeInfo(arg.Expression).Type;
+                if (argType != null && (argType.Name.EndsWith("Event") || argType.Name.EndsWith("Command")))
+                {
+                    dispatched.Add(argType.ToDisplayString());
+                }
+            }
+        }
+
+        return new TypeMetadata(
+            fullName,
+            typeSymbol.Name,
+            moduleName,
+            artifactType,
+            typeSymbol.TypeKind,
+            interfaces.ToImmutableArray(),
+            dependencies.ToImmutableArray(),
+            dispatched.ToImmutableArray(),
+            handledMessage);
+    }
+
+    /// <summary>
+    /// Transforms an API mapping invocation into a lightweight <see cref="EndpointMetadata"/> record.
+    /// </summary>
+    /// <param name="context">The syntax context for analyzing lambda bodies.</param>
+    /// <returns>A populated metadata record, or null if it's not a valid mapped endpoint.</returns>
+    private static EndpointMetadata ExtractEndpointMetadata(GeneratorSyntaxContext context)
+    {
+        var invocation = (InvocationExpressionSyntax)context.Node;
+        if (context.SemanticModel.GetSymbolInfo(invocation).Symbol is not IMethodSymbol symbol || !symbol.Name.StartsWith("Map"))
+            return null;
+
+        var routeArg = invocation.ArgumentList.Arguments.FirstOrDefault();
+        if (routeArg == null) return null;
+
+        var route = routeArg.Expression.ToString().Trim('"');
+        var verb = symbol.Name.Replace("Map", "").ToUpper();
+        var epId = $"EP_{Sanitize(verb + route)}";
+
+        var dependencies = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var dispatched = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        var lambda = invocation.ArgumentList.Arguments
+            .Select(a => a.Expression)
+            .FirstOrDefault(e => e is LambdaExpressionSyntax) as LambdaExpressionSyntax;
+
+        if (lambda != null)
+        {
+            var bodyCalls = lambda.DescendantNodes().OfType<InvocationExpressionSyntax>();
+            foreach (var bc in bodyCalls)
+            {
+                if (context.SemanticModel.GetSymbolInfo(bc).Symbol is IMethodSymbol bcSymbol && bcSymbol.ContainingType != null)
+                {
+                    dependencies.Add(bcSymbol.ContainingType.ToDisplayString());
                 }
 
-                foreach (var arg in invocation.ArgumentList.Arguments)
+                foreach (var arg in bc.ArgumentList.Arguments)
                 {
-                    var argType = model.GetTypeInfo(arg.Expression).Type;
+                    var argType = context.SemanticModel.GetTypeInfo(arg.Expression).Type;
                     if (argType != null && (argType.Name.EndsWith("Event") || argType.Name.EndsWith("Command")))
                     {
-                        dispatchedMessages.Add((typeFullName, argType.ToDisplayString()));
+                        dispatched.Add(argType.ToDisplayString());
                     }
                 }
             }
         }
+
+        return new EndpointMetadata(verb, route, epId, dependencies.ToImmutableArray(), dispatched.ToImmutableArray());
     }
 
     /// <summary>
-    /// Locates web API endpoints mapped via methods matching MapGet, MapPost, etc.
+    /// Rewrites abstract interface dependencies into their resolved concrete implementations.
     /// </summary>
-    private static void ScanForEndpoints(IMethodSymbol method, Compilation compilation, List<EndpointInfo> endpoints, HashSet<DependencyEdge> dependencies, List<(string, string)> dispatchedMessages)
-    {
-        foreach (var syntaxRef in method.DeclaringSyntaxReferences)
-        {
-            var model = compilation.GetSemanticModel(syntaxRef.SyntaxTree);
-            var methodSyntax = syntaxRef.GetSyntax() as MethodDeclarationSyntax;
-            if (methodSyntax == null) continue;
-
-            var invocations = methodSyntax.DescendantNodes().OfType<InvocationExpressionSyntax>();
-            foreach (var invocation in invocations)
-            {
-                var symbol = model.GetSymbolInfo(invocation).Symbol as IMethodSymbol;
-                if (symbol == null || !symbol.Name.StartsWith("Map")) continue;
-
-                var routeArg = invocation.ArgumentList.Arguments.FirstOrDefault();
-                if (routeArg == null) continue;
-
-                var route = routeArg.Expression.ToString().Trim('"');
-                var verb = symbol.Name.Replace("Map", "").ToUpper();
-                var epId = $"EP_{Sanitize(verb + route)}";
-
-                endpoints.Add(new EndpointInfo(verb, route, epId));
-
-                var lambda = invocation.ArgumentList.Arguments
-                    .Select(a => a.Expression)
-                    .FirstOrDefault(e => e is LambdaExpressionSyntax) as LambdaExpressionSyntax;
-
-                if (lambda != null)
-                {
-                    var lambdaModel = compilation.GetSemanticModel(lambda.SyntaxTree);
-                    var bodyCalls = lambda.DescendantNodes().OfType<InvocationExpressionSyntax>();
-                    foreach (var bc in bodyCalls)
-                    {
-                        var bcSymbol = lambdaModel.GetSymbolInfo(bc).Symbol as IMethodSymbol;
-                        if (bcSymbol != null && bcSymbol.ContainingType != null)
-                        {
-                            dependencies.Add(new DependencyEdge(epId, bcSymbol.ContainingType.ToDisplayString(), "Calls", "==>"));
-                        }
-
-                        foreach (var arg in bc.ArgumentList.Arguments)
-                        {
-                            var argType = lambdaModel.GetTypeInfo(arg.Expression).Type;
-                            if (argType != null && (argType.Name.EndsWith("Event") || argType.Name.EndsWith("Command")))
-                            {
-                                dispatchedMessages.Add((epId, argType.ToDisplayString()));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /// <summary>
-    /// Rewrites both the Source and Target of each dependency edge resolving interfaces to their concretions.
-    /// </summary>
+    /// <param name="abstractDeps">The collection of dependencies mapped to abstract interfaces.</param>
+    /// <param name="interfaceMap">The dictionary mapping interfaces to concrete class full names.</param>
+    /// <returns>A newly resolved HashSet of dependency edges.</returns>
     private static HashSet<DependencyEdge> ResolveConcreteDependencies(HashSet<DependencyEdge> abstractDeps, Dictionary<string, string> interfaceMap)
     {
         var resolved = new HashSet<DependencyEdge>();
@@ -361,8 +304,14 @@ public class ComponentDiagramGenerator : IIncrementalGenerator
     }
 
     /// <summary>
-    /// Intercepts and rewrites edges so that all interactions with a handler are routed through the message node.
+    /// Intercepts direct dependencies and routes them dynamically through Message nodes (Events/Commands).
     /// </summary>
+    /// <param name="dependencies">The current collection of structural edges.</param>
+    /// <param name="dispatchedMessages">The tracked list of dispatched event/command messages.</param>
+    /// <param name="messageHandlers">The dictionary connecting messages to handling classes.</param>
+    /// <param name="handlerMessages">The dictionary connecting handling classes back to their expected message.</param>
+    /// <param name="interfaceMap">The interface to implementation mapping dictionary.</param>
+    /// <param name="typeNodes">The collection of tracked architectural types.</param>
     private static void BridgeDynamicDispatch(HashSet<DependencyEdge> dependencies, List<(string CallerId, string MessageType)> dispatchedMessages, Dictionary<string, HashSet<string>> messageHandlers, Dictionary<string, string> handlerMessages, Dictionary<string, string> interfaceMap, Dictionary<string, TypeNode> typeNodes)
     {
         var edgesToRemove = new List<DependencyEdge>();
@@ -423,25 +372,163 @@ public class ComponentDiagramGenerator : IIncrementalGenerator
     }
 
     /// <summary>
-    /// Ascertains component responsibilities.
+    /// Generates the raw text payload for the Mermaid Diagram representation.
     /// </summary>
+    /// <param name="nodes">The system component nodes.</param>
+    /// <param name="dependencies">The calculated edges between components.</param>
+    /// <param name="endpoints">The mapped API endpoints acting as ingress points.</param>
+    /// <returns>A formatted Mermaid graphical string.</returns>
+    private static string GenerateMermaidSyntax(IEnumerable<TypeNode> nodes, HashSet<DependencyEdge> dependencies, List<EndpointInfo> endpoints)
+    {
+        var sb = new StringBuilder(8192); // Pre-allocate larger buffer
+        sb.AppendLine("%%{init: {'flowchart': {'defaultRenderer': 'elk'}} }%%");
+        sb.AppendLine("graph TD");
+
+        sb.AppendLine("    classDef endpoint fill:#4caf50,stroke:#2e7d32,stroke-width:2px,color:white;");
+        sb.AppendLine("    classDef facade fill:#e3f2fd,stroke:#1565c0,stroke-width:2px;");
+        sb.AppendLine("    classDef handler fill:#7e57c2,stroke:#4a148c,stroke-width:2px,color:white;");
+        sb.AppendLine("    classDef db fill:#efebe9,stroke:#4e342e,stroke-width:2px,shape:cylinder;");
+        sb.AppendLine("    classDef message fill:#fff9c4,stroke:#fbc02d,stroke-width:1px,stroke-dasharray: 5 5;");
+        sb.AppendLine("    classDef generic fill:#f5f5f5,stroke:#9e9e9e,stroke-width:1px;");
+
+        var trackedTypeIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var ep in endpoints)
+        {
+            sb.AppendLine($"    {ep.Id}([\"{ep.Verb} {ep.Route}\"]):::endpoint");
+            trackedTypeIds.Add(ep.Id);
+        }
+
+        foreach (var moduleGroup in nodes.GroupBy(n => n.Module))
+        {
+            bool isCore = moduleGroup.Key == "Core";
+            if (!isCore) sb.AppendLine($"    subgraph {Sanitize(moduleGroup.Key)}_Module [\"{moduleGroup.Key} Module\"]");
+
+            foreach (var node in moduleGroup)
+            {
+                string shape = node.ArtifactType == ArtifactType.Repository ? "[(" : (node.ArtifactType == ArtifactType.Message ? "{{" : "(");
+                string endShape = node.ArtifactType == ArtifactType.Repository ? ")]" : (node.ArtifactType == ArtifactType.Message ? "}}" : ")");
+
+                string style = node.ArtifactType switch
+                {
+                    ArtifactType.Repository => "db",
+                    ArtifactType.Entrypoint => "facade",
+                    ArtifactType.Handler => "handler",
+                    ArtifactType.Message => "message",
+                    _ => "generic"
+                };
+
+                string indent = isCore ? "    " : "        ";
+                sb.AppendLine($"{indent}{Sanitize(node.FullName)}{shape}\"{node.Name}\"{endShape}:::{style}");
+                trackedTypeIds.Add(node.FullName);
+            }
+
+            if (!isCore) sb.AppendLine("    end");
+        }
+
+        foreach (var dep in dependencies)
+        {
+            if (trackedTypeIds.Contains(dep.TargetFullName) && trackedTypeIds.Contains(dep.SourceFullName))
+            {
+                sb.AppendLine($"    {Sanitize(dep.SourceFullName)} {dep.EdgeStyle}|\"{dep.Label}\"| {Sanitize(dep.TargetFullName)}");
+            }
+        }
+
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Generates the C# static class containing the final Mermaid script.
+    /// Injects the code into the specific target namespace.
+    /// </summary>
+    /// <param name="mermaidSyntax">The raw diagram payload.</param>
+    /// <returns>A valid C# class string.</returns>
+    private static string GenerateCSharpWrapper(string mermaidSyntax)
+    {
+        var sb = new StringBuilder(8192);
+        sb.AppendLine("// <auto-generated/>");
+        sb.AppendLine("using System;");
+        sb.AppendLine("namespace Faster.Modulith;");
+        sb.AppendLine();
+        sb.AppendLine("/// <summary>");
+        sb.AppendLine("/// Contains the generated Mermaid diagram representing the system architecture.");
+        sb.AppendLine("/// </summary>");
+        sb.AppendLine("public static class ComponentDiagram {");
+        sb.AppendLine("    /// <summary>");
+        sb.AppendLine("    /// The raw string defining the C4 Level 3 Component Diagram.");
+        sb.AppendLine("    /// </summary>");
+        sb.AppendLine("    public const string MasterDiagram = @\"");
+
+        string escapedSyntax = mermaidSyntax.Replace("\"", "\"\"");
+        sb.Append(escapedSyntax);
+
+        sb.AppendLine("\";");
+        sb.AppendLine("}");
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Safely attempts to output the raw Mermaid string to the physical project directory.
+    /// Swallows exceptions intentionally to avoid crashing background IDE analytical processes upon file locks.
+    /// </summary>
+    /// <param name="options">The analyzer option payload detailing project build configurations.</param>
+    /// <param name="mermaidSyntax">The parsed string payload to write.</param>
+    private static void WriteDiagramToDisk(AnalyzerConfigOptionsProvider options, string mermaidSyntax)
+    {
+#pragma warning disable RS1035 // Do not use APIs banned for analyzers
+        try
+        {
+            if (options.GlobalOptions.TryGetValue("build_property.projectdir", out string projectDir) && !string.IsNullOrWhiteSpace(projectDir))
+            {
+                string filePath = Path.Combine(projectDir, "ComponentDiagram.mmd");
+
+                bool shouldWrite = true;
+                if (File.Exists(filePath))
+                {
+                    string existingContent = File.ReadAllText(filePath, Encoding.UTF8);
+                    if (existingContent == mermaidSyntax)
+                    {
+                        shouldWrite = false;
+                    }
+                }
+
+                if (shouldWrite)
+                {
+                    File.WriteAllText(filePath, mermaidSyntax, Encoding.UTF8);
+                }
+            }
+        }
+        catch (Exception)
+        {
+            // Silently swallow exceptions to ensure background IDE processes do not crash on file lock
+        }
+#pragma warning restore RS1035
+    }
+
+    /// <summary>
+    /// Categorizes structural components into recognized domain-driven layer types based on naming conventions.
+    /// </summary>
+    /// <param name="symbol">The named type symbol provided by the compiler.</param>
+    /// <returns>The resolved <see cref="ArtifactType"/>.</returns>
     private static ArtifactType ClassifyArtifact(INamedTypeSymbol symbol)
     {
         string name = symbol.Name;
-        if (name.EndsWith("Repository") || name.EndsWith("DbContext")) return ArtifactType.Repository;
-        if (name.EndsWith("Handler") || name.EndsWith("UseCase")) return ArtifactType.Handler;
-        if (name.EndsWith("Entrypoint")) return ArtifactType.Entrypoint;
+        if (name.EndsWith("Repository", StringComparison.OrdinalIgnoreCase) || name.EndsWith("DbContext", StringComparison.OrdinalIgnoreCase)) return ArtifactType.Repository;
+        if (name.EndsWith("Handler", StringComparison.OrdinalIgnoreCase) || name.EndsWith("UseCase", StringComparison.OrdinalIgnoreCase)) return ArtifactType.Handler;
+        if (name.EndsWith("Entrypoint", StringComparison.OrdinalIgnoreCase)) return ArtifactType.Entrypoint;
         if (name.EndsWith("Event") || name.EndsWith("Command")) return ArtifactType.Message;
         return ArtifactType.Generic;
     }
 
     /// <summary>
-    /// Ascertains module containment, filtering out Shared and Api/Program-level namespaces.
+    /// Resolves standard namespace strings into logical domain modules.
     /// </summary>
+    /// <param name="ns">The fully qualified namespace string.</param>
+    /// <returns>A concise module representation string.</returns>
     private static string ExtractModuleName(string ns)
     {
         if (string.IsNullOrWhiteSpace(ns)) return "Core";
-        if (ns.Contains(".Shared") || ns.EndsWith(".Api") || !ns.Contains(".Modules.")) return "Core";
+        if (ns.Contains(".Shared") || !ns.Contains(".Modules.")) return "Core";
         int index = ns.IndexOf(".Modules.");
         if (index >= 0)
         {
@@ -452,12 +539,50 @@ public class ComponentDiagramGenerator : IIncrementalGenerator
     }
 
     /// <summary>
-    /// Cleans strings mapped to identifiers required by Mermaid's syntax layout.
+    /// Prepares C# identifiers for consumption by Mermaid graph syntax definitions.
     /// </summary>
+    /// <param name="input">The string to sanitize.</param>
+    /// <returns>The sanitized string safe for chart rendering.</returns>
     private static string Sanitize(string input) => input.Replace(".", "_").Replace("<", "_").Replace(">", "_").Replace("/", "_").Replace(" ", "_").Replace(":", "_");
 
+    // =========================================================================
+    // Lightweight Immutable Records for Incremental Caching
+    // =========================================================================
+
+    /// <summary>
+    /// Determines the shape and styling behavior rendered for a given specific component node.
+    /// </summary>
     internal enum ArtifactType { Generic, Handler, Repository, Entrypoint, Message }
 
+    /// <summary>
+    /// An immutable representation capturing syntax semantics for Types mapping into the diagram.
+    /// </summary>
+    internal record TypeMetadata(string FullName, string Name, string Module, ArtifactType ArtifactType, TypeKind TypeKind, ImmutableArray<string> Interfaces, ImmutableArray<string> Dependencies, ImmutableArray<string> DispatchedMessages, string HandledMessage);
+
+    /// <summary>
+    /// An immutable representation capturing routing capabilities from API invocation declarations.
+    /// </summary>
+    internal record EndpointMetadata(string Verb, string Route, string Id, ImmutableArray<string> Dependencies, ImmutableArray<string> DispatchedMessages);
+
+    /// <summary>
+    /// Structure linking routing attributes mapped cleanly into generic dependency edges.
+    /// </summary>
+    internal class EndpointInfo
+    {
+        public EndpointInfo(string verb, string route, string id)
+        {
+            Verb = verb;
+            Route = route;
+            Id = id;
+        }
+        public string Verb { get; }
+        public string Route { get; }
+        public string Id { get; }
+    }
+
+    /// <summary>
+    /// Physical node payload carrying presentation details for the Mermaid pipeline.
+    /// </summary>
     internal class TypeNode
     {
         public TypeNode(string fullName, string module, string name, ArtifactType artifactType)
@@ -473,6 +598,10 @@ public class ComponentDiagramGenerator : IIncrementalGenerator
         public ArtifactType ArtifactType { get; }
     }
 
+    /// <summary>
+    /// Represents a structural connection flowing outward from a caller context to a referenced invocation.
+    /// Equality is explicitly calculated natively to ensure duplicate links are ignored effectively by hash sets.
+    /// </summary>
     internal class DependencyEdge : IEquatable<DependencyEdge>
     {
         public DependencyEdge(string sourceFullName, string targetFullName, string label, string edgeStyle)
@@ -491,18 +620,5 @@ public class ComponentDiagramGenerator : IIncrementalGenerator
             other != null && SourceFullName == other.SourceFullName && TargetFullName == other.TargetFullName && Label == other.Label && EdgeStyle == other.EdgeStyle;
         public override bool Equals(object obj) => Equals(obj as DependencyEdge);
         public override int GetHashCode() => (SourceFullName, TargetFullName, Label, EdgeStyle).GetHashCode();
-    }
-
-    internal class EndpointInfo
-    {
-        public EndpointInfo(string verb, string route, string id)
-        {
-            Verb = verb;
-            Route = route;
-            Id = id;
-        }
-        public string Verb { get; }
-        public string Route { get; }
-        public string Id { get; }
     }
 }
